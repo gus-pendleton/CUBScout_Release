@@ -1,0 +1,18 @@
+---
+title: "Codon Usage and Bias in Julia with CUBScout"
+author: "Augustus Pendleton"
+format:
+  html:
+    code-fold: false
+jupyter: julia-1.8
+---
+
+```{julia}
+using Glob
+files = glob("*.fna", "clean_genomes")
+```
+
+```{julia}
+using CUBScout
+milc(files)
+```
