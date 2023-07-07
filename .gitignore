@@ -28,3 +28,6 @@ clean_genomes/
 accessions.txt
 datasets
 ncbi_dataset.tsv
+julia-1.8.5/
+ncbi_dataset.zip
+renamed_genomes/

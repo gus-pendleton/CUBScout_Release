@@ -31,10 +31,10 @@ full_everything = function(filepaths){
   return(list(b, e, ep, mc, mi, s))
 }
 
-files = list.files("clean_genomes", pattern = "*.fna", full.names = TRUE)
+files = list.files("./CUBScout_Release/renamed_genomes", pattern = "*.fna", full.names = TRUE)
 
 milc_time = system.time(full_milc(files))
-enc_time = system.time(full_enc(files[1:200]))
+enc_time = system.time(full_enc(files))
 all_time = system.time(full_everything(files))
 
 write.csv(c(milc_time, enc_time, all_time), file = "r_results.csv")
