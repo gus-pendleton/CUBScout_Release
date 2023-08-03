@@ -4,15 +4,483 @@ author: "Augustus Pendleton"
 format:
   html:
     code-fold: false
+    theme: cyborg
 jupyter: julia-1.8
 ---
 
-```{julia}
-using Glob
-files = glob("*.fna", "clean_genomes")
+CUBScout helps you analyze codon usage in Julia. It also happens to be my first official package so I'm freakin' excited about it! If you think CUBScout can help you in your research, feel free to read through the documentation [here](https://gus-pendleton.github.io/CUBScout.jl/stable/), look at the [source code](https://github.com/gus-pendleton/CUBScout.jl), and reach out to me [on Twitter!](https://twitter.com/AugustusPendle1). The source files for this analysis are available [here](https://github.com/gus-pendleton/CUBScout_Release).
+
+The documentation has a good, step-by-step walk-through of what `CUBScout` can do. On this project, I want to show off an example of how I might use `CUBScout`, by exploring some real-life questions concerning codon usage. If you just want to see how `CUBScout` performs compared to its R equivalent, feel free to skip to the end ;). With that, let's get right into the nitty-gritty of genome analysis!
+
+### Let's start off with the basics
+
+CUBScout's primary function is to calculate codon usage bias (CUB...get it?). CUBScout input's are usually fasta-formatted files of coding sequences for a genome (though this is flexible - we'll show some advanced examples later). For my example analyses here, I randomly downloaded 997 .fna files containing coding sequences as annotated in RefSeq. While these files aren't available on the Github, you can find the accession numbers used in "genome_accessions.txt", and the code I used to download data in "genome_downloads.sh".
+
+Once you've got your genomes, we can generate a codon usage matrix, using the function `count_codons`. Let's try that:
+
+```{julia count_codons}
+using CUBScout # Load the package :)
+
+filename = joinpath(pwd(), "genomes", "cds_1.fna") # Let's specify a filepath
+
+results = count_codons(filename) # Let's count codons
+
+count_matrix = results[1] # Our count matrix is the first element in the tuple
 ```
 
-```{julia}
-using CUBScout
-milc(files)
+Count codons returns a three-element tuple. The first element is the count matrix. The second element is the gene identifiers, and the third element is a Boolean vector showing which genes passed a specific length threshold. This is by default 0, so all genes are included. 
+
+Our count matrix will always have 64 rows (for each codon in alphabetical order) and as many columns as there were CDS in our file. Each number in the matrix corresponds to how many times that codon occurred in that CDS. So we can see that our first gene used the codon AAA 32 times.
+
+Personally, I don't have the 64 codons memorized in alphabetical order, and I don't remember which codons codes for which amino acid. CUBScout stores this information in a special object called a CodonDict. CUBScout comes loaded with a default CodonDict, which follows the standard genetic code. 
+
+```{julia codon_dicts}
+DEFAULT_CodonDict.codons # Let's get our 64 codons in alphabetical order
+
+DEFAULT_CodonDict.AA # And their corresponding amino acids
 ```
+
+If you work with some particular organism that uses an alternative genetic code, [you can generate your own custom CodonDict.](https://gus-pendleton.github.io/CUBScout.jl/stable/cub/#Codon-Dictionaries)
+
+Now that we have a count matrix, we can look at codon frequency within this genome. Let's do that, using the `codon_frequency` function. Here, we'll calculate the frequency of each codon across the entire genome. 
+
+```{julia codon_frequency}
+codon_frequency(count_matrix, "net_genomic") # Let's calculate codon frequency
+```
+
+`CUBScout` supports four methods of calculating codon frequency, which you can read about in the [documentation](https://gus-pendleton.github.io/CUBScout.jl/stable/codons/#Codon-Frequency). For now, let's use our `codon_frequency` function to explore a fun hypothesis: codon frequency is markedly different in the beginning of genes versus the middle and the end.
+
+### Is codon frequency different in the beginning of a gene?
+[This paper](https://www.nature.com/articles/s41467-023-38077-5) included the intriguing finding that E. coli tends to use different codons in the beginning of its genes. However, they only tested this in one species, and they didn't control for the possibility that there is a bias towards specific amino acids in the first few residues. I'm going to test these hypotheses using `CUBScout`. I'll also demonstrate some of the ways I've learnd to do bioinformatics in Julia, using other packages like `FASTX`, `BioSequences`, and `Gadfly`.
+
+First, let's find all the files we downloaded.
+
+```{julia filenames}
+using Glob
+
+genome_dir = joinpath(pwd(), "genomes")
+
+files = readdir(glob"*.fna", genome_dir); # Let's find our files
+```
+
+Now, we want to test if the codon frequency of the first 8 codons in a gene tends to be from the codon frequency of a randomly selected eight codons somewhere else in the gene. In order to test this, I'm going to read in each .fna file, create a concatenated string which is all of the codons at positions 2-9 (don't need to measure ATG thousands of times) compared to eight contiguous codons at a random position. Then I'm going to calculate the codon frequency for each of those groups. 
+
+```{julia sample_firstgenome_codons}
+using FASTX # We'll use FASTX to read in FASTA files
+using BioSequences # We'll use BioSequences to parse nucleotide sequences
+using Random # We'll use some randon numbers too when sampling
+Random.seed!(31491)
+function sample_codons(filepath)
+  open(FASTA.Reader, filepath) do reader
+        start = "" # Initialize empty strings
+        random = ""
+        for record in reader
+          seq = sequence(record) # Get fasta sequence of a single gene
+          len = length(seq) # Find it's length
+          len < 60 && continue # Make sure it's not too short
+          start = start * seq[4:27] # Index codons 2 - 9 and append to our "start" string
+          r = 0 # Get ready to randomly sample a codon position
+          while true
+          r = rand(28:(len - 26)) # Find a random position in the gene, and avoiding any stop codons
+          if (r-1) % 3 == 0 break end # Make sure this is in frame
+          end
+          random = random * seq[r:(r+23)] # Starting from our random position, index 8 codons and append to our "random" string
+      end
+      return (LongDNA{4}(start), LongDNA{4}(random)) # Return as tuple of nucleotide sequences
+      end
+  end
+
+codons = sample_codons(files[1]) # Sample our first genome (B. subtilis)
+
+codon_counts = count_codons.(codons) # Generate codon count matrix for start and random codons
+
+freqs = codon_frequency.(codon_counts, "net_genomic") # Calculate frequency of each codon
+
+# Let's plot to see if the frequency of codons differs in "early" codons versus "random" codons
+labels = map(x->"$x", DEFAULT_CodonDict.codons) # Make alphabetical codon list in String format (for plotting)
+using Gadfly
+set_default_plot_size(5inch, 5inch)
+plot(
+  layer(x->x, 0, .1, Geom.line),
+  layer(x = freqs[2], y = freqs[1], Geom.point),
+  layer(x = freqs[2], y = freqs[1], label = labels, Geom.label),
+  Coord.cartesian(xmin=0, xmax=.1, ymin = 0, ymax = .1),
+  Guide.xlabel("Random Codon Frequency"),
+  Guide.ylabel("Early Codon Frequency"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.4], point_label_color = "white", grid_line_width=0mm)
+  )
+```
+
+Cool finding! We have the average frequency of each codon in a random location of a gene on the x axis, and the average frequency of each codon in the first 8-positions of a gene on the y axis. Codons below the line are less frequent in the beginning of genes, while codons above the line are more frequent. We can conclude that in our first genome (which happens to be *B. subtilis*), there is a distinctive pattern of codon usage in the beginning of the gene, versus the rest of the gene. 
+
+Moving forward, however, we are going to be combingin results from many genomes, which will likely have very different codon usage patterns. As such, maybe it would be better if we plotted the *difference* between these frequencies, rather than their frequency alone. This time, I'm going to calcualte the difference (I refer to it as "deviation" in my code) for each codon for our first genome.
+```{julia first_genome_deviation}
+deviations = Float64[]
+for (start, random) in zip(freqs...)
+  dev = start-random # Calculate a scaled % Deviation
+  push!(deviations,dev) # Add that to our vector
+end
+
+plot(
+  layer(x = freqs[2], y = deviations, Geom.point),
+  layer(yintercept = [0], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+  layer(x = freqs[2], y = deviations, label = labels, Geom.label, order = 2),
+  Guide.xlabel("Random Codon Frequency"),
+  Guide.ylabel("Deviation in Frequency at Start"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.4], point_label_color = "white", grid_line_width=0mm)
+)
+
+```
+
+Okay, this is cool! What we're observing is that in B. subtilis, there are some codons that are preferentially used in the beginning of genes. These appear to be AT-rich codons, especially AAA and ATA. There are also codons that are used less, especially a GC-rich codons, like GGC and GCC. 
+
+I wonder if this generalizes across many different genomes? Let's test it across our 997 randomly sampled genomes from NCBI's database:
+
+```{julia sample_allgenome_codons}
+all_genome_results = map(files) do file
+  codons = sample_codons(file)
+  codon_counts = count_codons.(codons)
+  freqs = codon_frequency.(codon_counts, "net_genomic")
+  deviations = Float64[]
+  for (start, random) in zip(freqs...)
+    dev = start-random
+    push!(deviations,dev)
+  end
+  return deviations
+end
+```
+
+Great! That's returned a a vector of 997 vectors, one for each genome, with the deviation for each codon from the start vs. the random codon samples. Now let's average that out. I'm going to also try it by averaging the absolute value, in case there are some codons that tend to be very different in the start, but maybe in different directions depending on genomic GC content.
+
+```{julia average_and_plot}
+deviation_matrix = reduce(hcat, all_genome_results) # Convert out vector of vectors to a matrix
+
+using Statistics
+average_deviation = vec(mean(deviation_matrix, dims = 2)) # Calculate average deviation
+average_sd = vec(std(deviation_matrix, dims = 2)) # It's variance
+average_abs_deviation = vec(mean(abs.(deviation_matrix), dims = 2)) # Repeat, but taking the absolute value first
+average_abs_sd = vec(std(abs.(deviation_matrix), dims = 2))
+
+
+using DataFrames
+
+dev_results = DataFrame(codon = labels, avg_dev = average_deviation, avg_abs_dev = average_abs_deviation, avg_std = average_sd, avg_abs_std = average_abs_sd)
+
+
+sorted_avgdev = sort(dev_results, :avg_dev) # Sort in order of deviation
+
+# Plotting the average deviations
+avg_devplot1 = plot(sorted_avgdev,
+  layer(yintercept=[0], Geom.hline(style = :dot, color=[colorant"ivory4"])),
+  layer(x = :codon, y = :avg_dev, ymin=(sorted_avgdev.avg_dev.-sorted_avgdev.avg_std), ymax=(sorted_avgdev.avg_dev.+sorted_avgdev.avg_std), color = [colorant"darkorange1"], Geom.point, Geom.errorbar),
+  Guide.xlabel("Codon"),
+  Guide.ylabel("Deviation in Frequency at Start"),
+  Guide.title("Averaged Deviation of Codon Frequency"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm
+  )
+)
+
+# Plotting the average of absolute deviations
+avg_abs_devplot1 = plot(sorted_avgdev,
+  layer(yintercept=[0], Geom.hline(style = :dot, color=[colorant"ivory4"])),
+  layer(x = :codon, y = :avg_abs_dev, ymin=(sorted_avgdev.avg_abs_dev.-sorted_avgdev.avg_abs_std), ymax=(sorted_avgdev.avg_abs_dev.+sorted_avgdev.avg_abs_std), color = [colorant"deepskyblue"], Geom.point, Geom.errorbar),
+  Guide.xlabel("Codon"),
+  Guide.ylabel("Deviation in Aboslute Frequency at Start"),
+  Guide.title("Averaged Absolute Deviation of Codon Frequency"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm
+  )
+)
+set_default_plot_size(7inch, 7inch)
+vstack(avg_devplot1, avg_abs_devplot1)
+```
+
+
+Wow, we see some of the same results! GC-rich codons are rarer in the beginning of genes, while AT-rich codons, especially AAA, are higher. 
+
+Is this just because amino acids are different at the beginning of genes? To see if there is an actual difference in which codons are preferred for each amino acid (synonymous codons), let's calculate codon frequency within each amino acid, rather than across all the codons we counted. Notice how I've changed the argument in our `codon_frequency` call.
+
+```{julia allgenome_codons_byAA}
+all_genome_byAA = map(files) do file
+  codons = sample_codons(file)
+  codon_counts = count_codons.(codons)
+  freqs = codon_frequency.(codon_counts, "byAA_genomic")
+  deviations = Float64[]
+  for (start, random) in zip(freqs...)
+    dev = start - random
+    push!(deviations,dev)
+  end
+  return deviations
+end
+
+```
+
+And again, let's average that out and plot.
+
+```{julia byAA_average_and_plot}
+deviation_matrix = reduce(hcat, all_genome_byAA)
+
+average_deviation = vec(mean(deviation_matrix, dims = 2))
+average_sd = vec(std(deviation_matrix, dims = 2))
+average_abs_deviation = vec(mean(abs.(deviation_matrix), dims = 2))
+average_abs_sd = vec(std(abs.(deviation_matrix), dims = 2))
+
+dev_results = DataFrame(codon = labels, avg_dev = average_deviation, avg_abs_dev = average_abs_deviation, avg_std = average_sd, avg_abs_std = average_abs_sd)
+
+
+sorted_avgdev = sort(dev_results, :avg_dev)
+
+# Plotting the average deviations
+avg_devplot = plot(sorted_avgdev,
+  layer(yintercept=[0], Geom.hline(style = :dot, color=[colorant"ivory4"])),
+  layer(x = :codon, y = :avg_dev, ymin=(sorted_avgdev.avg_dev.-sorted_avgdev.avg_std), ymax=(sorted_avgdev.avg_dev.+sorted_avgdev.avg_std), color = [colorant"darkorange1"], Geom.point, Geom.errorbar),
+  Guide.xlabel("Codon"),
+  Guide.ylabel("Deviation in Frequency at Start"),
+  Guide.title("Averaged Deviation of Codon Frequency"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm
+  )
+)
+
+# Plotting the average of absolute deviations
+avg_abs_devplot = plot(sorted_avgdev,
+  layer(yintercept=[0], Geom.hline(style = :dot, color=[colorant"ivory4"])),
+  layer(x = :codon, y = :avg_abs_dev, ymin=(sorted_avgdev.avg_abs_dev.-sorted_avgdev.avg_abs_std), ymax=(sorted_avgdev.avg_abs_dev.+sorted_avgdev.avg_abs_std), color = [colorant"deepskyblue"], Geom.point, Geom.errorbar),
+  Guide.xlabel("Codon"),
+  Guide.ylabel("Deviation in Aboslute Frequency at Start"),
+  Guide.title("Averaged Aboslute Deviation of Codon Frequency"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm
+  )
+)
+set_default_plot_size(7inch, 7inch)
+vstack(avg_devplot, avg_abs_devplot)
+
+```
+
+Fascinating! We do still see that AT-rich codons are favored in the beginning of genes, regardless of what amino acid they encode, especially the codons that end with AA like CAA, GAA, and AAA (UAA is a stop codon). Don't know why - but I'm interested now!
+
+### Is codon usage more "biased" at the beginning of genes?
+
+We've gotten a lot done so far using `CUBScout` to look at codon frequency at the beginning of genes. This has shown us that there are codons that are favored at the beginning of genes as opposed to their middle. However, our approach above isn't very robust. GC content will strongly influence codon frequency, and we didn't scale our data, so our results are biased towards highly-expressed codons. Luckily, many people have worked to develop measures of codon usage bias that address these biases. 
+
+There are multiple measures of codon usage bias; `CUBScout` is able to calculate six. These measures balance how biased a gene is in its codon usage, specifically focusing on how evenly genes use synonymous codons. Many codon usage bias measures also seek to normalize these calculations based on over-all GC-content and gene length. Finally, these measures calculate an overall bias across *all* codons, instead of comparing frequencies for each codon. As such, these measures are a good tool for us to explore codon usage bias as we move deeper into a gene. 
+
+Usually, codon usage bias is calculated for each gene in a genome, and compares how biased that gene's codon usage bias is compared to the rest of the genome. As an example, let's calculate a metric call ENC' for our *B. subtilis* genome:
+
+```{julia calculating ENC_P}
+enc_p(filename).self
+```
+
+Each element in these vector corresponds to the codon usage bias of a gene in the genome. ENC' is completely unbiased at a value of 61, and values less than that indicate more bias. [There are many ways to tune our codon usage calculations, including gene length thresholds, and removing start or stop codons.](https://gus-pendleton.github.io/CUBScout.jl/stable/cub/#Under-default-parameters) All `CUBScout` codon usage bias functions are multi-threaded as well; they will use all the threads you supply when you initialize Julia. We can also supply a custom reference set of genes to calculate codon usage bias against. For this, we'll use the `find_seqs` function to find ribosomal genes. 
+
+```{julia find_seqs}
+filename
+
+ribos = find_seqs(filename, r"ribosomal")
+```
+
+And let's re-run, using ribosomal genes as a reference set.
+
+```{julia encp_with_ribos}
+enc_p_results = enc_p(filename, ref_seqs = (ribosomal = ribos,))
+enc_p_results.ribosomal
+```
+
+Now that we've practiced calculating codon usage bias, let's use it to test the bias of the early codons in a gene. I am going to try a different approach in how we sample our codons. I'm going to use a 8-codon sliding window. So for each genome, we'll take the first 8 codons for every gene and join them into one big "gene". Then we'll slide our window three codons to down, and take the next 8 codons from every gene and join them into one big "gene". We'll do this all the way to the 80-th codon, and then compare how biased the codon usage is between these big "genes". I'm going to use the function `all_cub` which calculates all six codon usage measures at once.
+
+```{julia sliding_onegenome}
+function sample_sliding_codons(filepath)
+  open(FASTA.Reader, filepath) do reader
+        codons = []
+        for record in reader
+          seq = sequence(record)
+          len = length(seq)
+          len <= 240 && continue # Skip if smaller than 80 codons
+          for i in 1:9:217
+            push!(codons, seq[i:(i+23)]) # Grab each 8-codon string 
+          end 
+      end
+      matrix = reshape(codons, 25, :) # Reshape into a matrix, where each row is a "window", each column is a gene
+      return matrix
+      end
+end
+
+sliding_seqs = sample_sliding_codons(files[1])
+
+joined_seqs = LongDNA{4}.(map(join, eachrow(sliding_seqs))) # Join each row into one long string of DNA
+
+cub_results = all_cub(joined_seqs) # Calculate all SIX CUB measures.
+
+# Turn into a dataframe
+df_results = DataFrame(B = cub_results.B.self,
+          ENCP = cub_results.ENCP.self,
+          ENC = cub_results.ENC.ENC,
+          MCB = cub_results.MCB.self,
+          MILC = cub_results.MILC.self,
+          SCUO = cub_results.SCUO.SCUO,
+          Start = collect(1:9:217))
+bplot1 = plot(df_results,
+            x = :Start,
+            y = :B,
+            Geom.point, Geom.line,
+            layer(yintercept = [0], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("Karlin and Mrazek's B"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+encplot1 = plot(df_results,
+            layer(x = :Start,
+            y = :ENC,
+            Geom.point, Geom.line),
+            layer(yintercept = [61], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("ENC"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+encpplot1 = plot(df_results,
+            layer(x = :Start,
+            y = :ENCP,
+            Geom.point, Geom.line),
+            layer(yintercept = [61], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("ENC'"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+mcbplot1 = plot(df_results,
+            layer(x = :Start,
+            y = :MCB,
+            Geom.point, Geom.line),
+            layer(yintercept = [0], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("MCB"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+milcplot1 = plot(df_results,
+            layer(x = :Start,
+            y = :MILC,
+            Geom.point, Geom.line),
+            layer(yintercept = [.5], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("MILC"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+scuoplot1 = plot(df_results,
+            layer(x = :Start,
+            y = :SCUO,
+            Geom.point, Geom.line),
+            layer(yintercept = [0], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("SCUO"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+
+set_default_plot_size(7.5inch, 5inch)
+gridstack([bplot1 encplot1 encpplot1; mcbplot1 milcplot1 scuoplot1])
+
+```
+
+Okay! These plots can be a lot to interpret off the bat. We calculated six measures of codon usage bias, each of which is displayed on the y-axis. The dashed orange line indicates "no bias" for that measure. So any deviation away from the line does imply some bias for the codons from that window. So we are observing an increase in codon usage bias in the beginning of genes in Bacillus subtilis. Does this generalize? Let's do the same analysis for all genes, for all of our genomes. I'm excluding ENC and SCUO from these calculations; [they can get noisier in situations like this](https://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-6-182) and so aren't very helpful in this application.
+
+```{julia sliding_allgenomes}
+# We'll map across our list of files, creating CUB dataframes for each one
+big_cub_results_vec = map(files) do file
+  codons = sample_sliding_codons(file)
+  joined_seqs = LongDNA{4}.(map(join, eachrow(codons)))
+  cub_results = all_cub(joined_seqs)
+  df_results = DataFrame(B = cub_results.B.self,
+          ENCP = cub_results.ENCP.self,
+          MCB = cub_results.MCB.self,
+          MILC = cub_results.MILC.self,
+          Start = collect(1:9:217))
+  return df_results
+end
+
+big_cub_results = reduce(vcat, big_cub_results_vec) # Combine dataframes into 1
+
+grouped_cub = groupby(big_cub_results, :Start) # Group by the codon window position
+
+combined_cub = combine(grouped_cub, valuecols(grouped_cub) .=> mean, valuecols(grouped_cub) .=> std) # Calculate average codon usage bias in the window
+
+# Plot :)
+bplot = plot(combined_cub,
+            x = :Start,
+            y = :B_mean,
+            ymin = (combined_cub.B_mean .- combined_cub.B_std),
+            ymax = (combined_cub.B_mean .+ combined_cub.B_std),
+            Geom.point, Geom.errorbar,
+            layer(yintercept = [0], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("Karlin and Mrazek's B"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+encpplot = plot(combined_cub,
+            layer(x = :Start,
+            y = :ENCP_mean,
+            ymin = (combined_cub.ENCP_mean .- combined_cub.ENCP_std),
+            ymax = (combined_cub.ENCP_mean .+ combined_cub.ENCP_std),
+            Geom.point, Geom.errorbar),
+            layer(yintercept = [61], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("ENC'"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+mcbplot = plot(combined_cub,
+            layer(x = :Start,
+            y = :MCB_mean,
+            ymin = (combined_cub.MCB_mean .- combined_cub.MCB_std),
+            ymax = (combined_cub.MCB_mean .+ combined_cub.MCB_std),
+            Geom.point, Geom.errorbar),
+            layer(yintercept = [0], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("MCB"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+milcplot = plot(combined_cub,
+            layer(x = :Start,
+            y = :MILC_mean,
+            ymin = (combined_cub.MILC_mean .- combined_cub.MILC_std),
+            ymax = (combined_cub.MILC_mean .+ combined_cub.MILC_std),
+            Geom.point, Geom.errorbar),
+            layer(yintercept = [.5], Geom.hline(color = colorant"darkorange1", style = :dot), order = 1),
+            Guide.xlabel("Codon Position"),
+            Guide.ylabel("MILC"),
+            Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm, errorbar_cap_length=0mm)
+            )
+set_default_plot_size(5inch, 5inch)
+gridstack([bplot encpplot; mcbplot milcplot])
+```
+
+We once again see clear trends of stronger codon usage bias at the beginning of genes as opposed to the "middle", across all of our genomes. 
+
+### Conclusions
+
+Using `CUBScout` we've shown that codon usage bias is different at the beginning of genes compared to the rest of a gene's length. Moreover, it appears that this is especially biased towards AT-rich codons at the beginning of genes, regardless of amino-acid biases at the beginning of genes or GC content.
+
+
+### Comparing performance
+
+I based `CUBScout` off a wonderful package from R called coRdon. One of my goals in learning Julia was to write faster code for genomic analyses. As such, I wanted to compare the performance of `CUBScout` to its R equivalent. 
+
+I tested these packages' speed on three functions; ENC, MILC, and the combined process of calculating all six CUB measures. To note, in R this required customized functions, as you first read in a fasta file as a BioString, calculate codon frequency, and then calculate the metrics. In comparison, these are single-functions in `CUBScout`. I timed each language in running these functions for the 997 genomes I include in this analysis. You can see the code I ran in the files "r_rests.R" and "small_julia.jl" / "julia_runs.sh" on this project's repo. All analyses were run on an AMD EPYC 64-core processor with 1014GiB system memory hosted by the Cornell BioHPC Core. 
+
+```{julia speed-up}
+using CSV
+performance_results = CSV.read(joinpath(pwd(), "Combined_Results.csv"), DataFrame)
+julia_results = subset(performance_results, :Language => ByRow(x -> x == "Julia"))
+grouped = groupby(julia_results, [:Threads, :Task])
+combined = combine(grouped, :Time => mean, :Time => std)
+r_results = subset(performance_results, :Language => ByRow(x -> x == "R"))
+small_r = select(r_results, Not([:Threads, :Language, :Time]), :Time => :R_Time)
+joined = leftjoin(combined, small_r, on = :Task)
+transform!(joined, [:R_Time, :Time_mean] => ByRow((x,y)->x/y) => :Speed_Up)
+
+plot(joined, 
+  x = :Threads, y = :Speed_Up, color = :Task, Geom.point, Geom.line,
+  Guide.ylabel("Times Faster than R"),
+  Theme(discrete_highlight_color = c->nothing, alphas=[0.8], grid_line_width = 0mm
+  ))
+```
+
+This plot shows the speed-up of `CUBScout` compared to R for each task. `CUBScout` is consistenly faster (5X up to 25X), especially as it is able to utilize multiple threads when analyzing multiple genomes. 
+
+### Thank you for reading!
+
+If you've come this far, thank you! `CUBScout` was a personal passion project of mine, and it's the first time I've developed software. I'd love input, collaborations, or questions!
