@@ -8,7 +8,7 @@ format:
 jupyter: julia-1.8
 ---
 
-![](cubscount_logo.png)
+![](cubscout_logo.png)
 
 CUBScout helps you analyze codon usage in Julia. It also happens to be my first official package so I'm freakin' excited about it! If you think CUBScout can help you in your research, feel free to read through the documentation [here](https://gus-pendleton.github.io/CUBScout.jl/stable/), look at the [source code](https://github.com/gus-pendleton/CUBScout.jl), and [connect with me!](https://gus-pendleton.github.io/). The source code and files for this analysis are available [here](https://github.com/gus-pendleton/CUBScout_Release).
 
