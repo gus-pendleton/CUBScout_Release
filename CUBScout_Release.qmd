@@ -8,9 +8,11 @@ format:
 jupyter: julia-1.8
 ---
 
-CUBScout helps you analyze codon usage in Julia. It also happens to be my first official package so I'm freakin' excited about it! If you think CUBScout can help you in your research, feel free to read through the documentation [here](https://gus-pendleton.github.io/CUBScout.jl/stable/), look at the [source code](https://github.com/gus-pendleton/CUBScout.jl), and reach out to me [on Twitter!](https://twitter.com/AugustusPendle1). The source files for this analysis are available [here](https://github.com/gus-pendleton/CUBScout_Release).
+![](cubscount_logo.png)
 
-The documentation has a good, step-by-step walk-through of what `CUBScout` can do. On this project, I want to show off an example of how I might use `CUBScout`, by exploring some real-life questions concerning codon usage. If you just want to see how `CUBScout` performs compared to its R equivalent, feel free to skip to the end ;). With that, let's get right into the nitty-gritty of genome analysis!
+CUBScout helps you analyze codon usage in Julia. It also happens to be my first official package so I'm freakin' excited about it! If you think CUBScout can help you in your research, feel free to read through the documentation [here](https://gus-pendleton.github.io/CUBScout.jl/stable/), look at the [source code](https://github.com/gus-pendleton/CUBScout.jl), and [connect with me!](https://gus-pendleton.github.io/). The source code and files for this analysis are available [here](https://github.com/gus-pendleton/CUBScout_Release).
+
+The documentation has a good, step-by-step walk-through of what `CUBScout` can do and how to use it. On this project, I want to show off an example of how I've been using `CUBScout`, by exploring some real-life questions concerning codon usage. If you just want to see how `CUBScout` performs compared to its R equivalent, feel free to skip to the end. With that, let's get right into the nitty-gritty of genome analysis!
 
 ### Let's start off with the basics
 
@@ -36,7 +38,8 @@ Personally, I don't have the 64 codons memorized in alphabetical order, and I do
 
 ```{julia codon_dicts}
 DEFAULT_CodonDict.codons # Let's get our 64 codons in alphabetical order
-
+```
+```{julia}
 DEFAULT_CodonDict.AA # And their corresponding amino acids
 ```
 
